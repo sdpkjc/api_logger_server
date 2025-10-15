@@ -5,6 +5,7 @@ import asyncio
 from datetime import datetime
 from uuid import uuid4
 from typing import Dict, Optional
+import base64
 
 import httpx
 from fastapi import FastAPI, Request, Header, Response
@@ -12,9 +13,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 BASE_URL = os.getenv("PROXY_BASE_URL", "https://api.openai.com")
 LOG_DIR = os.getenv("LOG_DIR", "./logs")
-os.makedirs(LOG_DIR, exist_ok=True)
 
-app = FastAPI(title="Minimal Proxy")
+app = FastAPI(title="Logger Proxy")
 
 
 def clean_headers(headers: httpx.Headers) -> Dict[str, str]:
@@ -25,11 +25,12 @@ def clean_headers(headers: httpx.Headers) -> Dict[str, str]:
         }
     }
 
-async def log_interaction(**kw):
+async def log_interaction(_log_dir: str, **kw):
     ts = datetime.utcnow().isoformat(timespec="seconds")
     req_id = kw.get("request_id", str(uuid4()))
     filename = f"{ts.replace(':', '-')}_{req_id}.json"
-    path = os.path.join(LOG_DIR, filename)
+    path = os.path.join(_log_dir, filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(kw, f, ensure_ascii=False, indent=2)
 
@@ -39,7 +40,20 @@ async def health():
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = Header(None)):
-    url = f"{BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+    _PROXY_BASE_URL = BASE_URL
+    _LOG_DIR = LOG_DIR
+    path_split = path.split("/")
+    base64_json = None
+    if len(path_split) > 0:
+        try:
+            base64_json = json.loads(base64.urlsafe_b64decode(path_split[0]).decode("utf-8"))
+            path_split = path_split[1:]
+            _PROXY_BASE_URL = base64_json.get("PROXY_BASE_URL", BASE_URL)
+            _LOG_DIR = base64_json.get("LOG_DIR", LOG_DIR)
+        except Exception:
+            pass
+    path = "/".join(path_split)
+    url = f"{_PROXY_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
     req_id, start = str(uuid4()), time.perf_counter()
     ip = (x_forwarded_for or (request.client.host if request.client else "") or "").split(",")[0].strip()
     body = await request.body()
@@ -96,6 +110,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                         await cm.__aexit__(None, None, None)
                         
                         await log_interaction(
+                            _LOG_DIR,
                             request_id=req_id,
                             ts=datetime.utcnow().isoformat(),
                             path=path,
@@ -108,6 +123,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                                 "chunks": parsed_chunks,
                                 "stream_error": err["msg"],
                             },
+                            base64_json=base64_json,
                         )
 
                 return StreamingResponse(
@@ -124,6 +140,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                 resp_json = {"non_json_body_len": len(resp.content)}
 
             await log_interaction(
+                _LOG_DIR,
                 request_id=req_id,
                 ts=datetime.utcnow().isoformat(),
                 path=path,
@@ -132,6 +149,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                 duration_ms=int((time.perf_counter() - start) * 1000),
                 request_obj=body_json,
                 response_obj=resp_json,
+                base64_json=base64_json,
             )
 
             return Response(
@@ -142,9 +160,3 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
 
     except httpx.HTTPError as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
-
-# pip install fastapi httpx uvicorn
-# PROXY_BASE_URL="https://open.bigmodel.cn/api/paas/v4" LOG_DIR="./logs" uvicorn api_logger_server:app --reload --port 9527
-# OPENAI_BASE_URL="https://api.openai.com/v1" LOG_DIR="./logs" uvicorn api_logger_server:app --reload --port 9527
-# http://localhost:8000/
-# http://localhost:8000/health
