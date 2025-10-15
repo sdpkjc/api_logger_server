@@ -66,8 +66,8 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
 
                 cm = client.stream(request.method, url, headers=headers, content=body)
                 upstream = await cm.__aenter__()
-                
-                chunks = []
+
+                parsed_chunks = []
                 err = {"msg": None}
 
                 async def gen():
@@ -80,8 +80,11 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                                 for line in text.splitlines()
                                 if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]")
                             ]
-                            if lines:
-                                chunks.append("".join(lines))
+                            for json_str in lines:
+                                try:
+                                    parsed_chunks.append(json.loads(json_str))
+                                except json.JSONDecodeError:
+                                    pass
                     except (
                         httpx.WriteError,
                         httpx.ReadError,
@@ -102,7 +105,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                             request_obj=body_json,
                             response_obj={
                                 "stream": True,
-                                "aggregated": "".join(chunks),
+                                "chunks": parsed_chunks,
                                 "stream_error": err["msg"],
                             },
                         )
@@ -140,9 +143,8 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
     except httpx.HTTPError as e:
         return JSONResponse(status_code=502, content={"error": str(e)})
 
-
 # pip install fastapi httpx uvicorn
-# PROXY_BASE_URL="https://open.bigmodel.cn/api/paas/v4" LOG_DIR="./logs" uvicorn api_logger_server:app --reload
-# OPENAI_BASE_URL="https://api.openai.com/v1" LOG_DIR="./logs" uvicorn api_logger_server:app --reload
+# PROXY_BASE_URL="https://open.bigmodel.cn/api/paas/v4" LOG_DIR="./logs" uvicorn api_logger_server:app --reload --port 9527
+# OPENAI_BASE_URL="https://api.openai.com/v1" LOG_DIR="./logs" uvicorn api_logger_server:app --reload --port 9527
 # http://localhost:8000/
 # http://localhost:8000/health
