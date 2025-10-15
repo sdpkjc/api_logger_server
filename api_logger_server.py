@@ -4,11 +4,11 @@ import json
 import asyncio
 from datetime import datetime
 from uuid import uuid4
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 import base64
 
 import httpx
-from fastapi import FastAPI, Request, Header, Response
+from fastapi import FastAPI, Request, Header, Response, Body, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 
 DEFAULT_PROXY_BASE_URL = os.getenv("DEFAULT_PROXY_BASE_URL", "https://api.openai.com")
@@ -40,6 +40,18 @@ async def log_interaction(_log_file_path: str = None, **kw):
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.post("/encode")
+async def encode(payload: Any = Body(...)):
+    try:
+        json_bytes = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+    b64 = base64.urlsafe_b64encode(json_bytes).decode("utf-8")
+    return {"base64": b64}
+
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = Header(None)):
