@@ -11,8 +11,8 @@ import httpx
 from fastapi import FastAPI, Request, Header, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
-BASE_URL = os.getenv("PROXY_BASE_URL", "https://api.openai.com")
-LOG_DIR = os.getenv("LOG_DIR", "./logs")
+DEFAULT_PROXY_BASE_URL = os.getenv("DEFAULT_PROXY_BASE_URL", "https://api.openai.com")
+DEFAULT_LOG_DIR = os.getenv("DEFAULT_LOG_DIR", "./logs")
 
 app = FastAPI(title="Logger Proxy")
 
@@ -25,11 +25,14 @@ def clean_headers(headers: httpx.Headers) -> Dict[str, str]:
         }
     }
 
-async def log_interaction(_log_dir: str, **kw):
+async def log_interaction(_log_file_path: str = None, **kw):
     ts = datetime.utcnow().isoformat(timespec="seconds")
     req_id = kw.get("request_id", str(uuid4()))
-    filename = f"{ts.replace(':', '-')}_{req_id}.json"
-    path = os.path.join(_log_dir, filename)
+    if _log_file_path is None:
+        filename = f"{ts.replace(':', '-')}_{req_id}.json"
+        path = os.path.join(DEFAULT_LOG_DIR, filename)
+    else:
+        path = _log_file_path
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(kw, f, ensure_ascii=False, indent=2)
@@ -40,20 +43,20 @@ async def health():
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = Header(None)):
-    _PROXY_BASE_URL = BASE_URL
-    _LOG_DIR = LOG_DIR
+    _proxy_base_url = DEFAULT_PROXY_BASE_URL
+    _log_file_path = None
     path_split = path.split("/")
     base64_json = None
     if len(path_split) > 0:
         try:
             base64_json = json.loads(base64.urlsafe_b64decode(path_split[0]).decode("utf-8"))
             path_split = path_split[1:]
-            _PROXY_BASE_URL = base64_json.get("PROXY_BASE_URL", BASE_URL)
-            _LOG_DIR = base64_json.get("LOG_DIR", LOG_DIR)
+            _proxy_base_url = base64_json.get("PROXY_BASE_URL", DEFAULT_PROXY_BASE_URL)
+            _log_file_path = base64_json.get("LOG_FILE_PATH", None)
         except Exception:
             pass
     path = "/".join(path_split)
-    url = f"{_PROXY_BASE_URL.rstrip('/')}/{path.lstrip('/')}"
+    url = f"{_proxy_base_url.rstrip('/')}/{path.lstrip('/')}"
     req_id, start = str(uuid4()), time.perf_counter()
     ip = (x_forwarded_for or (request.client.host if request.client else "") or "").split(",")[0].strip()
     body = await request.body()
@@ -110,7 +113,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                         await cm.__aexit__(None, None, None)
                         
                         await log_interaction(
-                            _LOG_DIR,
+                            _log_file_path,
                             request_id=req_id,
                             ts=datetime.utcnow().isoformat(),
                             path=path,
@@ -140,7 +143,7 @@ async def proxy(path: str, request: Request, x_forwarded_for: Optional[str] = He
                 resp_json = {"non_json_body_len": len(resp.content)}
 
             await log_interaction(
-                _LOG_DIR,
+                _log_file_path,
                 request_id=req_id,
                 ts=datetime.utcnow().isoformat(),
                 path=path,
