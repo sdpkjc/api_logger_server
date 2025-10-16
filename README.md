@@ -25,9 +25,7 @@ curl -X POST http://127.0.0.1:9527/chat/completions \
 ### Send a request with base64 encoded JSON
 
 ```bash
-B64=$(curl -sS -X POST "http://127.0.0.1:9527/encode" \
-  -H "Content-Type: application/json" \
-  -d '{"a": "b"}' | jq -r '.base64')
+B64=$(echo '{"a": "b"}' | base64 -w 0)
 
 curl -X POST http://127.0.0.1:9527/$B64/chat/completions \
   -H "Content-Type: application/json" \
@@ -43,9 +41,7 @@ The base64 encoded JSON will be decoded and logged.
 ### Switch the proxy base URL and the log directory
 
 ```bash
-B64=$(curl -sS -X POST "http://127.0.0.1:9527/encode" \
-  -H "Content-Type: application/json" \
-  -d '{"PROXY_BASE_URL": "https://api.openai.com/v1", "LOG_FILE_PATH": "./logs_openai/a.json"}' | jq -r '.base64')
+B64=$(echo '{"PROXY_BASE_URL": "https://api.openai.com/v1", "LOG_FILE_PATH": "./logs_openai/a.json"}' | base64 -w 0)
 
 curl -X POST http://127.0.0.1:9527/$B64/chat/completions \
   -H "Content-Type: application/json" \
